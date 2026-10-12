@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>联机德州扑克</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        .poker-table {
+            background: linear-gradient(135deg, #0d5c2b 0%, #1a8038 100%);
+            border-radius: 50%;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3), inset 0 0 50px rgba(0,0,0,0.2);
+        }
+        .card {
+            width: 60px;
+            height: 84px;
+            border-radius: 6px;
+            background: white;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            transition: transform 0.2s;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid #ccc;
+        }
+        .card:hover {
+            transform: translateY(-5px);
+        }
+        .player-card {
+            width: 40px;
+            height: 56px;
+            font-size: 10px;
+        }
+        .card-back {
+            background: #15803d;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .player-info {
+            background: rgba(0,0,0,0.5);
+            border-radius: 8px;
+            padding: 8px;
+            color: white;
+            text-align: center;
+        }
+        .acting-player {
+            box-shadow: 0 0 0 3px #fbbf24;
+        }
+        .folded-player {
+            opacity: 0.5;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 min-h-screen flex items-center justify-center">
+    <div id="app" class="w-full max-w-4xl">
+        <!-- 初始登录/房间界面 -->
+        <div id="lobby" class="bg-gray-800 rounded-xl p-8 shadow-xl">
+            <h1 class="text-3xl font-bold text-white text-center mb-6">联机德州扑克</h1>
+            <div class="mb-4">
+                <label class="block text-gray-300 mb-2">你的昵称</label>
+                <input type="text" id="nickname" class="w-full px-4 py-2 rounded-lg bg-gray-700 text-white border border-gray-600 focus:outline-none focus:border-green-500" placeholder="输入你的昵称">
+            </div>
+            <div class="grid grid-cols-2 gap-4">
+                <button id="createBtn" class="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg transition">创建房间</button>
+                <div class="flex gap-2">
+                    <input type="text" id="roomInput" class="flex-1 px-4 py-2 rounded-lg bg-gray-700 text-white border border-gray-600 focus:outline-none focus:border-green-500" placeholder="房间号">
+                    <button id="joinBtn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition">加入</button>
+                </div>
+            </div>
+            <div id="errorMsg" class="mt-4 text-red-400 text-center hidden"></div>
+        </div>
+
+        <!-- 游戏界面 -->
+        <div id="game" class="hidden">
+            <!-- 状态信息 -->
+            <div class="text-center mb-4">
+                <span id="gameStatus" class="text-white text-lg font-semibold"></span>
+                <span id="potInfo" class="text-yellow-400 text-lg ml-4"></span>
+            </div>
+
+            <!-- 牌桌 -->
+            <div class="poker-table w-full aspect-square relative flex items-center justify-center">
+                <!-- 顶部玩家 -->
+                <div id="player-top" class="absolute top-4 left-1/2 -translate-x-1/2 player-info hidden">
+                    <div class="text-sm font-semibold"></div>
+                    <div class="text-xs text-gray-300 chips"></div>
+                    <div class="text-xs text-yellow-400 bet"></div>
+                    <div class="flex gap-1 mt-1 cards"></div>
+                </div>
+
+                <!-- 左边玩家 -->
+                <div id="player-left" class="absolute left-4 top-1/2 -translate-y-1/2 player-info hidden">
+                    <div class="text-sm font-semibold"></div>
+                    <div class="text-xs text-gray-300 chips"></div>
+                    <div class="text-xs text-yellow-400 bet"></div>
+                    <div class="flex gap-1 mt-1 cards"></div>
+                </div>
+
+                <!-- 右边玩家 -->
+                <div id="player-right" class="absolute right-4 top-1/2 -translate-y-1/2 player-info hidden">
+                    <div class="text-sm font-semibold"></div>
+                    <div class="text-xs text-gray-300 chips"></div>
+                    <div class="text-xs text-yellow-400 bet"></div>
+                    <div class="flex gap-1 mt-1 cards"></div>
+                </div>
+
+                <!-- 公共牌区域 -->
+                <div id="communityCards" class="flex gap-2 z-10">
+                    <!-- 公共牌会在这里渲染 -->
+                </div>
+
+                <!-- 底部玩家（自己） -->
+                <div id="player-bottom" class="absolute bottom-4 left-1/2 -translate-x-1/2 player-info">
+                    <div class="text-sm font-semibold"></div>
+                    <div class="text-xs text-gray-300 chips"></div>
+                    <div class="text-xs text-yellow-400 bet"></div>
+                    <div class="flex gap-1 mt-1 cards"></div>
+                </div>
+            </div>
+
+            <!-- 操作区域 -->
+            <div id="actions" class="mt-6 flex justify-center gap-3 flex-wrap">
+                <!-- 准备按钮 -->
+                <button id="readyBtn" class="hidden bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg transition">准备开始</button>
+                
+                <!-- 游戏操作按钮 -->
+                <button id="foldBtn" class="hidden bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-6 rounded-lg transition">弃牌</button>
+                <button id="callBtn" class="hidden bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg transition">跟注</button>
+                <div id="raiseArea" class="hidden flex gap-2">
+                    <input type="number" id="raiseInput" class="w-24 px-4 py-2 rounded-lg bg-gray-700 text-white border border-gray-600 focus:outline-none focus:border-green-500" placeholder="加注金额">
+                    <button id="raiseBtn" class="bg-yellow-600 hover:bg-yellow-700 text-white font-bold py-2 px-4 rounded-lg transition">加注</button>
+                </div>
+                <button id="allinBtn" class="hidden bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-6 rounded-lg transition">全下</button>
+                
+                <!-- 离开房间按钮 -->
+                <button id="leaveBtn" class="bg-gray-600 hover:bg-gray-700 text-white font-bold py-3 px-6 rounded-lg transition">离开房间</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 连接SocketIO
+        const socket = io();
+        let mySid = null;
+        let currentRoomId = null;
+        let gameState = 'waiting';
+        
+        // 解析treys的Card，正确解析编码
+        function parseCard(card) {
+            const rankStr = '23456789TJQKA';
+            const suitSymbols = ['♠', '♥', '♦', '♣'];
+            const suitColors = ['black', 'red', 'red', 'black'];
+            // treys的Card编码：suit在12-13位，rank在16-28位的bit位
+            const suit = (card >> 12) & 0x3;
+            let rank = 0;
+            // 找到rank对应的bit位
+            for (let i=0; i<13; i++) {
+                if (card & (1 << (i + 16))) {
+                    rank = i;
+                    break;
+                }
+            }
+            return {
+                rank: rankStr[rank],
+                suit: suitSymbols[suit],
+                color: suitColors[suit]
+            };
+        }
+
+        // 创建牌的DOM元素，完全内联的SVG牌，不需要任何外部资源
+        function createCardElement(card, isSmall=false) {
+            const cardEl = document.createElement('div');
+            if (isSmall) {
+                cardEl.className = 'card player-card';
+            } else {
+                cardEl.className = 'card';
+            }
+            
+            if (!card) {
+                // 牌的背面
+                cardEl.classList.add('card-back');
+                cardEl.innerHTML = '<div class="text-xs">?</div>';
+                return cardEl;
+            }
+            
+            const cardInfo = parseCard(card);
+            cardEl.style.color = cardInfo.color;
+            cardEl.innerHTML = `
+                <div class="font-bold">${cardInfo.rank}</div>
+                <div class="text-lg">${cardInfo.suit}</div>
+            `;
+            return cardEl;
+        }
+
+        // 渲染玩家信息
+        function renderPlayer(el, player, isMe) {
+            if (!player) {
+                el.classList.add('hidden');
+                return;
+            }
+            el.classList.remove('hidden');
+            
+            // 更新玩家信息
+            el.querySelector('.font-semibold').textContent = player.nickname;
+            el.querySelector('.chips').textContent = `筹码: ${player.chips}`;
+            el.querySelector('.bet').textContent = player.current_bet > 0 ? `下注: ${player.current_bet}` : '';
+            
+            // 行动中标记
+            if (player.is_acting) {
+                el.classList.add('acting-player');
+            } else {
+                el.classList.remove('acting-player');
+            }
+            
+            // 弃牌标记
+            if (player.folded) {
+                el.classList.add('folded-player');
+            } else {
+                el.classList.remove('folded-player');
+            }
+            
+            // 渲染手牌
+            const cardsEl = el.querySelector('.cards');
+            cardsEl.innerHTML = '';
+            const isShowdown = gameState === 'showdown';
+            
+            if (isMe && player.hand && player.hand.length > 0) {
+                // 自己的手牌，正常显示
+                player.hand.forEach(card => {
+                    const cardEl = createCardElement(card, true);
+                    cardsEl.appendChild(cardEl);
+                });
+            } else if (isShowdown && player.hand && player.hand.length > 0 && !player.folded) {
+                // 结算的时候，其他人的手牌也显示（亮牌）
+                player.hand.forEach(card => {
+                    const cardEl = createCardElement(card, true);
+                    cardsEl.appendChild(cardEl);
+                });
+            } else if (!player.folded) {
+                // 其他人的手牌，没到结算，显示背面
+                for (let i=0; i<2; i++) {
+                    const cardEl = createCardElement(null, true);
+                    cardsEl.appendChild(cardEl);
+                }
+            }
+        }
+
+        // 渲染公共牌
+        function renderCommunityCards(cards) {
+            communityCardsEl.innerHTML = '';
+            cards.forEach(card => {
+                const cardEl = createCardElement(card);
+                communityCardsEl.appendChild(cardEl);
+            });
+            // 补全空的位置
+            for (let i=cards.length; i<5; i++) {
+                const placeholder = document.createElement('div');
+                placeholder.className = 'w-[60px] h-[84px] border-2 border-dashed border-white/30 rounded-lg';
+                communityCardsEl.appendChild(placeholder);
+            }
+        }
+
+        // 更新游戏状态
+        function updateGameState(state) {
+            gameState = state.game_state;
+            currentRoomId = state.room_id;
+            
+            // 更新状态文本
+            const statusText = {
+                'waiting': '等待玩家准备...',
+                'preflop': '翻牌前',
+                'flop': '翻牌后',
+                'turn': '转牌后',
+                'river': '河牌后',
+                'showdown': '结算中...'
+            };
+            gameStatusEl.textContent = statusText[gameState] || '未知状态';
+            potInfoEl.textContent = `底池: ${state.pot}`;
+            
+            // 渲染公共牌
+            renderCommunityCards(state.community_cards);
+            
+            // 分配玩家到位置
+            const players = state.players;
+            const myIndex = players.findIndex(p => p.sid === socket.id);
+            mySid = players[myIndex]?.sid;
+            
+            // 位置分配：自己在bottom，然后其他玩家按顺序分配到top、left、right
+            const positions = ['bottom', 'top', 'left', 'right'];
+            const playerPositions = {};
+            playerPositions[myIndex] = 0; // 自己在bottom（索引0）
+            
+            let posIdx = 1;
+            for (let i=0; i<players.length; i++) {
+                if (i !== myIndex) {
+                    playerPositions[i] = posIdx;
+                    posIdx++;
+                }
+            }
+            
+            // 渲染每个玩家
+            for (let i=0; i<players.length; i++) {
+                const p = players[i];
+                const pos = positions[playerPositions[i]];
+                const el = playerEls[pos];
+                renderPlayer(el, p, i === myIndex);
+            }
+            
+            // 隐藏多余的玩家位置
+            for (let i=posIdx; i<4; i++) {
+                const pos = positions[i];
+                playerEls[pos].classList.add('hidden');
+            }
+            
+            // 更新按钮状态
+            updateButtons(state, myIndex);
+        }
+
+        // 更新按钮显示
+        function updateButtons(state, myIndex) {
+            const me = state.players[myIndex];
+            const isMyTurn = me?.is_acting;
+            
+            // 隐藏所有按钮
+            readyBtn.classList.add('hidden');
+            foldBtn.classList.add('hidden');
+            callBtn.classList.add('hidden');
+            raiseArea.classList.add('hidden');
+            allinBtn.classList.add('hidden');
+            
+            if (state.game_state === 'waiting') {
+                // 等待状态，显示准备按钮
+                if (!me.ready) {
+                    readyBtn.classList.remove('hidden');
+                }
+            } else if (isMyTurn) {
+                // 我的回合，显示操作按钮
+                foldBtn.classList.remove('hidden');
+                callBtn.classList.remove('hidden');
+                raiseArea.classList.remove('hidden');
+                allinBtn.classList.remove('hidden');
+                
+                // 更新跟注按钮的文本
+                const callAmount = state.current_bet - me.current_bet;
+                callBtn.textContent = callAmount > 0 ? `跟注 ${callAmount}` : '过牌';
+                
+                // 设置加注的默认值
+                raiseInput.min = state.min_raise;
+                raiseInput.value = state.min_raise;
+            }
+        }
+
+        // DOM元素
+        const lobbyEl = document.getElementById('lobby');
+        const gameEl = document.getElementById('game');
+        const nicknameEl = document.getElementById('nickname');
+        const roomInputEl = document.getElementById('roomInput');
+        const createBtn = document.getElementById('createBtn');
+        const joinBtn = document.getElementById('joinBtn');
+        const errorMsg = document.getElementById('errorMsg');
+        
+        const gameStatusEl = document.getElementById('gameStatus');
+        const potInfoEl = document.getElementById('potInfo');
+        const communityCardsEl = document.getElementById('communityCards');
+        
+        const playerEls = {
+            top: document.getElementById('player-top'),
+            left: document.getElementById('player-left'),
+            right: document.getElementById('player-right'),
+            bottom: document.getElementById('player-bottom')
+        };
+        
+        const readyBtn = document.getElementById('readyBtn');
+        const foldBtn = document.getElementById('foldBtn');
+        const callBtn = document.getElementById('callBtn');
+        const raiseArea = document.getElementById('raiseArea');
+        const raiseInput = document.getElementById('raiseInput');
+        const raiseBtn = document.getElementById('raiseBtn');
+        const allinBtn = document.getElementById('allinBtn');
+        const leaveBtn = document.getElementById('leaveBtn');
+
+        // 事件监听
+        createBtn.addEventListener('click', () => {
+            const nickname = nicknameEl.value.trim();
+            if (!nickname) {
+                showError('请输入昵称');
+                return;
+            }
+            socket.emit('create_room', { nickname });
+        });
+
+        joinBtn.addEventListener('click', () => {
+            const nickname = nicknameEl.value.trim();
+            const roomId = roomInputEl.value.trim();
+            if (!nickname) {
+                showError('请输入昵称');
+                return;
+            }
+            if (!roomId) {
+                showError('请输入房间号');
+                return;
+            }
+            socket.emit('join_room', { nickname, room_id: roomId });
+        });
+
+        readyBtn.addEventListener('click', () => {
+            socket.emit('player_ready');
+        });
+
+        foldBtn.addEventListener('click', () => {
+            socket.emit('player_action', { action: 'fold' });
+        });
+
+        callBtn.addEventListener('click', () => {
+            socket.emit('player_action', { action: 'call' });
+        });
+
+        raiseBtn.addEventListener('click', () => {
+            const amount = parseInt(raiseInput.value);
+            if (isNaN(amount) || amount < 20) {
+                showError('加注金额至少20');
+                return;
+            }
+            socket.emit('player_action', { action: 'raise', raise_amount: amount });
+        });
+
+        allinBtn.addEventListener('click', () => {
+            socket.emit('player_action', { action: 'allin' });
+        });
+
+        leaveBtn.addEventListener('click', () => {
+            socket.emit('leave_room');
+            // 回到大厅
+            gameEl.classList.add('hidden');
+            lobbyEl.classList.remove('hidden');
+        });
+
+        // Socket事件
+        socket.on('room_created', (data) => {
+            // 切换到游戏界面
+            lobbyEl.classList.add('hidden');
+            gameEl.classList.remove('hidden');
+            alert(`房间创建成功！房间号：${data.room_id}，分享给好友加入吧！`);
+        });
+
+        socket.on('room_state', (data) => {
+            // 切换到游戏界面
+            lobbyEl.classList.add('hidden');
+            gameEl.classList.remove('hidden');
+            // 更新状态
+            updateGameState(data);
+        });
+
+        socket.on('error', (data) => {
+            showError(data.message);
+        });
+
+        function showError(msg) {
+            errorMsg.textContent = msg;
+            errorMsg.classList.remove('hidden');
+            setTimeout(() => {
+                errorMsg.classList.add('hidden');
+            }, 3000);
+        }
+
+        // 连接成功
+        socket.on('connect', () => {
+            console.log('Connected to server');
+        });
+
+        socket.on('disconnect', () => {
+            showError('连接断开，正在重连...');
+        });
+    </script>
+</body>
+</html>
